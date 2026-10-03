@@ -8,13 +8,16 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/net/html"
 )
 
 const (
-	maxDepth = 1
+	maxDepth = 2
 	maxPages = 100
+	workers  = 5
 )
 
 func main() {
@@ -22,45 +25,91 @@ func main() {
 		fmt.Println("using: go run . <url>")
 		os.Exit(1)
 	}
+	start := time.Now()
 	crawl(os.Args[1])
+	fmt.Println("time of work:", time.Since(start).Round(time.Millisecond))
 }
 
 type task struct {
-	url string
+	url   string
 	depth int
 }
 
+type result struct {
+	task   task
+	links  []string
+	err    error
+	worker int
+}
+
+func worker(id int, tasks <-chan task, results chan<- result, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for t := range tasks {
+		links, err := getLinks(t.url)
+		results <- result{task: t, links: links, err: err, worker: id}
+	}
+}
+
 func crawl(startURL string) {
+	tasks := make(chan task)
+	results := make(chan result)
+
+	var wg sync.WaitGroup
+	for i := 1; i <= workers; i++ {
+		wg.Add(1)
+		go worker(i, tasks, results, &wg)
+	}
+
 	seen := map[string]bool{startURL: true}
 	queue := []task{{url: startURL, depth: 0}}
 	pages := 0
+	inFlight := 0
 
-	for len(queue) > 0 && pages < maxPages {
-		// the first one
-		t := queue[0]
-		queue = queue[1:]
-
-		// download page and get links
-		links, err := getLinks(t.url)
-		pages++
-		if err != nil {
-			fmt.Printf("[%d] error: %s: %v\n", t.depth, t.url, err)
-			continue
-		}
-		fmt.Printf("[%d] %s (links: %d)\n", t.depth, t.url, len(links))
-
-		if t.depth >= maxDepth {
-			continue
+	for (len(queue) > 0 && pages < maxPages) || inFlight > 0 {
+		var sendCh chan task
+		var next task
+		if len(queue) > 0 && pages < maxPages {
+			sendCh = tasks
+			next = queue[0]
 		}
 
-		for _, link := range links {
-			if seen[link] {
+		select {
+		case sendCh <- next:
+			queue = queue[1:]
+			inFlight++
+			pages++
+
+		case r := <-results:
+			inFlight--
+			t := r.task
+
+			if r.err != nil {
+				fmt.Printf("[w%d][%d] error: %s: %v\n", r.worker, t.depth, t.url, r.err)
 				continue
 			}
-			seen[link] = true
-			queue = append(queue, task{url: link, depth: t.depth + 1})
+
+			if t.depth >= maxDepth {
+				fmt.Printf("[w%d][%d] %s (links: %d, max depth)\n",
+					r.worker, t.depth, t.url, len(r.links))
+				continue
+			}
+
+			added := 0
+			for _, link := range r.links {
+				if seen[link] {
+					continue
+				}
+				seen[link] = true
+				queue = append(queue, task{url: link, depth: t.depth + 1})
+				added++
+			}
+
+			fmt.Printf("[w%d][%d] %s (links: %d, new: %d, in queue: %d, in work: %d)\n",
+				r.worker, t.depth, t.url, len(r.links), added, len(queue), inFlight)
 		}
 	}
+	close(tasks)
+	wg.Wait()
 
 	fmt.Println("downloaded pages:", pages)
 	fmt.Println("left in queue:", len(queue))
@@ -179,6 +228,3 @@ func cleanLinks(base *url.URL, hrefs []string) []string {
 	}
 	return result
 }
-
-
-
