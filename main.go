@@ -10,23 +10,44 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"context"
+	"os/signal"
+	"bufio"
 
 	"golang.org/x/net/html"
+	"log"
 )
 
 const (
 	maxDepth = 2
 	maxPages = 100
 	workers  = 5
+	requestTimeout = 10 * time.Second
+	requestDelay = 500 * time.Millisecond
+	maxBodySize = 5 * 1024 * 1024 // 5 megabytes
+	userAgent = "LearningCrawler/0.1"
+	maxDuration = 1 * time.Minute
+	maxRobotsSize = 500 * 1024 // max robots.txt size
 )
+
+var client = &http.Client{Timeout: requestTimeout}
 
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("using: go run . <url>")
 		os.Exit(1)
 	}
+
+	log.SetFlags(log.Ltime | log.Lmicroseconds)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	ctx, cancel := context.WithTimeout(ctx, maxDuration)
+	defer cancel()
+
 	start := time.Now()
-	crawl(os.Args[1])
+	crawl(ctx, os.Args[1])
 	fmt.Println("time of work:", time.Since(start).Round(time.Millisecond))
 }
 
@@ -42,22 +63,40 @@ type result struct {
 	worker int
 }
 
-func worker(id int, tasks <-chan task, results chan<- result, wg *sync.WaitGroup) {
+func worker(ctx context.Context, id int, tasks <-chan task, results chan<- result, limiter <- chan time.Time, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for t := range tasks {
-		links, err := getLinks(t.url)
+		select {
+		case <- limiter:
+		case <- ctx.Done():
+		}
+
+		links, err := getLinks(ctx, t.url)
 		results <- result{task: t, links: links, err: err, worker: id}
 	}
 }
 
-func crawl(startURL string) {
+func crawl(ctx context.Context, startURL string) {
+	robots, err := fetchRobots(ctx, startURL)
+	if err != nil {
+		log.Printf("robots.txt isn't downloaded, so let it be so: %v", err)
+	}
+	log.Printf("number of prohibitions in robots.txt: %d", len(robots.disallow))
+
+	if !robots.allowed(startURL) {
+		log.Printf("start URL is not allowed in robots.txt: %s", startURL)
+		return
+	}
+
 	tasks := make(chan task)
 	results := make(chan result)
+	ticker := time.NewTicker(requestDelay)
+	defer ticker.Stop()
 
 	var wg sync.WaitGroup
 	for i := 1; i <= workers; i++ {
 		wg.Add(1)
-		go worker(i, tasks, results, &wg)
+		go worker(ctx, i, tasks, results, ticker.C, &wg)
 	}
 
 	seen := map[string]bool{startURL: true}
@@ -65,10 +104,13 @@ func crawl(startURL string) {
 	pages := 0
 	inFlight := 0
 
-	for (len(queue) > 0 && pages < maxPages) || inFlight > 0 {
+	done := ctx.Done() // cancelation channel
+	stopping := false // "stop" mode
+
+	for (!stopping && len(queue) > 0 && pages < maxPages) || inFlight > 0 {
 		var sendCh chan task
 		var next task
-		if len(queue) > 0 && pages < maxPages {
+		if !stopping && len(queue) > 0 && pages < maxPages {
 			sendCh = tasks
 			next = queue[0]
 		}
@@ -79,33 +121,47 @@ func crawl(startURL string) {
 			inFlight++
 			pages++
 
+		case <- done:
+			stopping = true
+			done = nil
+			log.Printf("stopping (%v), waiting for other requests to finish: %d", ctx.Err(), inFlight)
+
 		case r := <-results:
 			inFlight--
 			t := r.task
 
 			if r.err != nil {
-				fmt.Printf("[w%d][%d] error: %s: %v\n", r.worker, t.depth, t.url, r.err)
+				if ctx.Err() != nil {
+					log.Printf("[w%d][%d] interrupted: %s", r.worker, t.depth, t.url)
+				} else {
+					log.Printf("[w%d][%d] error: %s: %v", r.worker, t.depth, t.url, r.err)
+				}
 				continue
 			}
 
 			if t.depth >= maxDepth {
-				fmt.Printf("[w%d][%d] %s (links: %d, max depth)\n",
+				log.Printf("[w%d][%d] %s (links: %d, max depth)",
 					r.worker, t.depth, t.url, len(r.links))
 				continue
 			}
 
 			added := 0
+			blocked := 0
 			for _, link := range r.links {
 				if seen[link] {
 					continue
 				}
 				seen[link] = true
+				if !robots.allowed(link){
+					blocked++
+					continue
+				}
 				queue = append(queue, task{url: link, depth: t.depth + 1})
 				added++
 			}
 
-			fmt.Printf("[w%d][%d] %s (links: %d, new: %d, in queue: %d, in work: %d)\n",
-				r.worker, t.depth, t.url, len(r.links), added, len(queue), inFlight)
+			log.Printf("[w%d][%d] %s (links: %d, new: %d, prohibited: %d, in queue: %d, in work: %d)",
+				r.worker, t.depth, t.url, len(r.links), added, blocked,len(queue), inFlight)
 		}
 	}
 	close(tasks)
@@ -113,10 +169,23 @@ func crawl(startURL string) {
 
 	fmt.Println("downloaded pages:", pages)
 	fmt.Println("left in queue:", len(queue))
+
+	switch ctx.Err() {
+	case context.DeadlineExceeded:
+		fmt.Println("stopping reason: execution time expired")
+	case context.Canceled:
+		fmt.Println("stopping reason: interrupted (Ctrl+C)")
+	default:
+		if len(queue) == 0 {
+			fmt.Println("stopping reason: covered everything possible")
+		} else {
+			fmt.Println("stopping reason: reached page limit")
+		}
+	}
 }
 
-func getLinks(pageURL string) ([]string, error) {
-	body, base, err := fetch(pageURL)
+func getLinks(ctx context.Context, pageURL string) ([]string, error) {
+	body, base, err := fetch(ctx, pageURL)
 	if err != nil {
 		return nil, err
 	}
@@ -131,8 +200,14 @@ func getLinks(pageURL string) ([]string, error) {
 
 // check whether the page is correct
 // returns html and final addr
-func fetch(pageURL string) ([]byte, *url.URL, error) {
-	resp, err := http.Get(pageURL)
+func fetch(ctx context.Context, pageURL string) ([]byte, *url.URL, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -147,7 +222,7 @@ func fetch(pageURL string) ([]byte, *url.URL, error) {
 		return nil, nil, fmt.Errorf("it's not a html, it's a %s", contentType)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -227,4 +302,108 @@ func cleanLinks(base *url.URL, hrefs []string) []string {
 		result = append(result, link)
 	}
 	return result
+}
+
+// to ban from robots.txt for all robots (User-agent: *)
+type robotsRules struct {
+	disallow []string
+}
+
+// is it allowed to visit the addr
+func (r* robotsRules) allowed(link string) bool {
+	u, err := url.Parse(link)
+	if err != nil {
+		return false
+	}
+	path := u.RequestURI()
+	for _, prefix := range r.disallow {
+		if strings.HasPrefix(path, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+// fetchRobots downloads and fetches robots.txt from site
+func fetchRobots(ctx context.Context, startURL string) (*robotsRules, error) {
+	empty := &robotsRules{}
+
+	start, err := url.Parse(startURL)
+	if err != nil {
+		return empty, err
+	}
+	robotsURL := start.Scheme + "://" + start.Host + "/robots.txt"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, robotsURL, nil)
+	if err != nil {
+		return empty, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return empty, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return empty, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return empty, fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	return parseRobots(io.LimitReader(resp.Body, maxRobotsSize))
+}
+
+// reads robots.txt by line and collects disallows for User-agent: *
+func parseRobots(r io.Reader) (*robotsRules, error) {
+	rules := &robotsRules{}
+	applies := false // does the current group belong to us
+	lastWasUA := false // was the previous line also a User-agent
+
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// cutting off everything thats after #
+		if i := strings.Index(line, "#"); i >= 0 {
+			line = line[:i]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// split by key: value
+		key, value, ok := strings.Cut(line, "")
+		if !ok {
+			continue
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+
+		switch key {
+		case "user-agent":
+			if !lastWasUA {
+				applies = false // new group starts
+			}
+			if value == "*" {
+				applies = true
+			}
+			lastWasUA = true
+		case "disallow":
+			lastWasUA = false
+			if applies && value != "" {
+				rules.disallow = append(rules.disallow, value)
+			}
+		default:
+			lastWasUA = false
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return &robotsRules{}, err
+	}
+
+	return rules, nil
 }
