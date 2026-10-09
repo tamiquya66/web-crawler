@@ -52,14 +52,14 @@ func fetchRobots(ctx context.Context, startURL string) (*robotsRules, error) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return empty, nil
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return parseRobots(io.LimitReader(resp.Body, maxRobotsSize))
+	case resp.StatusCode >= 400 && resp.StatusCode < 500:
+		return &robotsRules{}, nil
+	default:
+		return nil, fmt.Errorf("robots.txt unavailable: %s", resp.Status)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return empty, fmt.Errorf("bad status: %s", resp.Status)
-	}
-
-	return parseRobots(io.LimitReader(resp.Body, maxRobotsSize))
 }
 
 // reads robots.txt by line and collects disallows for User-agent: *
@@ -82,7 +82,7 @@ func parseRobots(r io.Reader) (*robotsRules, error) {
 		}
 
 		// split by key: value
-		key, value, ok := strings.Cut(line, "")
+		key, value, ok := strings.Cut(line, ":")
 		if !ok {
 			continue
 		}

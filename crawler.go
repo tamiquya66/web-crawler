@@ -39,7 +39,8 @@ func worker(ctx context.Context, id int, tasks <-chan task, results chan<- resul
 func crawl(ctx context.Context, pool *pgxpool.Pool, startURL string) {
 	robots, err := fetchRobots(ctx, startURL)
 	if err != nil {
-		log.Printf("robots.txt isn't downloaded, so let it be so: %v", err)
+		log.Printf("robots.txt can't be loaded: %v", err)
+		return
 	}
 	log.Printf("number of prohibitions in robots.txt: %d", len(robots.disallow))
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,7 +10,18 @@ import (
 	"strings"
 )
 
-var client = &http.Client{Timeout: requestTimeout}
+var client = &http.Client{
+	Timeout: requestTimeout,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if req.URL.Hostname() != via[0].URL.Hostname() {
+			return http.ErrUseLastResponse // we don't go to the other domain
+		}
+		if len(via) >= 10 {
+			return errors.New("too many redirects")
+		}
+		return nil
+	},
+}
 
 type pageData struct {
 	status int
