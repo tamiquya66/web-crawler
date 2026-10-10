@@ -38,10 +38,11 @@ func worker(ctx context.Context, id int, tasks <-chan task, results chan<- resul
 
 func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 	startURL := cfg.startURL
+	site := sitePrefix(startURL)
 
 	robots, err := fetchRobots(ctx, startURL)
 	if err != nil {
-		log.Printf("robots.txt can't be loaded: %v", err)
+		log.Printf("robots.txt can't be loaded, stopping: %v", err)
 		return
 	}
 	log.Printf("number of prohibitions in robots.txt: %d", len(robots.disallow))
@@ -49,6 +50,14 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 	if !robots.allowed(startURL) {
 		log.Printf("start URL is not allowed in robots.txt: %s", startURL)
 		return
+	}
+
+	if err := prepareQueue(ctx, pool, site, startURL, cfg.fresh); err != nil {
+		log.Printf("failed to prepare the queue: %v", err)
+		return
+	}
+	if n, err := countPending(pool, site); err == nil {
+		log.Printf("in queue on start: %d", n)
 	}
 
 	saves := make(chan pageRecord, saveBuffer)
@@ -66,18 +75,33 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 		go worker(ctx, i, tasks, results, ticker.C, &wg)
 	}
 
-	seen := map[string]bool{startURL: true}
-	queue := []task{{url: startURL, depth: 0}}
+	var queue []task
 	pages := 0
 	inFlight := 0
 
 	done := ctx.Done() // cancelation channel
 	stopping := false  // "stop" mode
 
-	for (!stopping && len(queue) > 0 && pages < cfg.maxPages) || inFlight > 0 {
+	for {
+		if !stopping && len(queue) == 0 && pages < cfg.maxPages {
+			claimed, err := claimTasks(ctx, pool, site, min(cfg.workers, cfg.maxPages-pages))
+			if err != nil {
+				if ctx.Err() == nil {
+					log.Printf("failed to claim tasks from database: %v", err)
+				}
+				stopping = true
+			}
+			queue = claimed
+		}
+
+		canSend := !stopping && len(queue) > 0
+		if !canSend && inFlight == 0 {
+			break
+		}
+
 		var sendCh chan task
 		var next task
-		if !stopping && len(queue) > 0 && pages < cfg.maxPages {
+		if canSend {
 			sendCh = tasks
 			next = queue[0]
 		}
@@ -87,7 +111,6 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 			queue = queue[1:]
 			inFlight++
 			pages++
-
 		case <-done:
 			stopping = true
 			done = nil
@@ -101,6 +124,7 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 				if ctx.Err() != nil {
 					// we are not saving interrupted pages: it's not a site's problem
 					// we interrupted them
+					// task remains 'in progress' and returns at the next launch
 					log.Printf("[w%d][%d] interrupted: %s", r.worker, t.depth, t.url)
 					continue
 				}
@@ -116,6 +140,24 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 				continue
 			}
 
+			var added int64
+			blocked := 0
+			if t.depth < cfg.maxDepth {
+				var allowed []string
+				for _, link := range r.page.links {
+					if robots.allowed(link) {
+						allowed = append(allowed, link)
+					} else {
+						blocked++
+					}
+				}
+				n, err := enqueueLinks(pool, allowed, t.depth+1)
+				if err != nil {
+					log.Printf("failed to place links in queue: %s: %v", t.url, err)
+				}
+				added = n
+			}
+
 			saves <- pageRecord{
 				url:       t.url,
 				depth:     t.depth,
@@ -125,29 +167,8 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 				fetchedAt: time.Now(),
 			}
 
-			if t.depth >= cfg.maxDepth {
-				log.Printf("[w%d][%d] %s (links: %d, max depth)",
-					r.worker, t.depth, t.url, len(r.page.links))
-				continue
-			}
-
-			added := 0
-			blocked := 0
-			for _, link := range r.page.links {
-				if seen[link] {
-					continue
-				}
-				seen[link] = true
-				if !robots.allowed(link) {
-					blocked++
-					continue
-				}
-				queue = append(queue, task{url: link, depth: t.depth + 1})
-				added++
-			}
-
-			log.Printf("[w%d][%d] %s (links: %d, new: %d, prohibited: %d, in queue: %d, in work: %d)",
-				r.worker, t.depth, t.url, len(r.page.links), added, blocked, len(queue), inFlight)
+			log.Printf("[w%d][%d] %s (links: %d, new: %d, prohibited: %d, in work: %d)",
+				r.worker, t.depth, t.url, len(r.page.links), added, blocked, inFlight)
 		}
 	}
 	close(tasks)
@@ -156,8 +177,10 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 	close(saves)
 	<-writerDone
 
-	fmt.Println("downloaded pages:", pages)
-	fmt.Println("left in queue:", len(queue))
+	fmt.Println("downloaded pages at this launch:", pages)
+	if n, err := countPending(pool, site); err == nil {
+		fmt.Println("waiting in queue:", n)
+	}
 
 	switch ctx.Err() {
 	case context.DeadlineExceeded:
@@ -165,10 +188,10 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 	case context.Canceled:
 		fmt.Println("stopping reason: interrupted (Ctrl+C)")
 	default:
-		if len(queue) == 0 {
-			fmt.Println("stopping reason: covered everything possible")
+		if pages >= cfg.maxPages {
+			fmt.Println("stopping reason: page limit reached")
 		} else {
-			fmt.Println("stopping reason: reached page limit")
+			fmt.Println("stopping reason: covered everything possible")
 		}
 	}
 }

@@ -40,6 +40,9 @@ func TestResolveLink(t *testing.T) {
 		{"other host", "https://github.com/golang/go", "", false},
 		{"mailto", "mailto:hello@go.dev", "", false},
 		{"javascript", "javascript:void(0)", "", false},
+		{"archive skipped", "/dl/go1.22.0.linux-amd64.tar.gz", "", false},
+		{"uppercase pdf skipped", "/files/Report.PDF", "", false},
+		{"html extension kept", "/doc/page.html", "https://go.dev/doc/page.html", true},
 	}
 
 	for _, tt := range tests {

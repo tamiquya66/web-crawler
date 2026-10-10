@@ -15,6 +15,7 @@ type config struct {
 	workers  int
 	delay    time.Duration
 	duration time.Duration
+	fresh    bool
 }
 
 // parse flags and check whether they are correct
@@ -22,10 +23,11 @@ func parseConfig() (config, error) {
 	var cfg config
 
 	flag.IntVar(&cfg.maxDepth, "depth", 2, "maximum depth for crawling")
-	flag.IntVar(&cfg.maxPages, "pages", 50, "maximum pages for crawling")
+	flag.IntVar(&cfg.maxPages, "pages", 50, "maximum pages for a single crawl")
 	flag.IntVar(&cfg.workers, "workers", 5, "maximum workers for crawling")
 	flag.DurationVar(&cfg.delay, "delay", 500*time.Millisecond, "pause between requests")
 	flag.DurationVar(&cfg.duration, "duration", 1*time.Minute, "total work time")
+	flag.BoolVar(&cfg.fresh, "fresh", false, "restart the site crawl by clearing its queue")
 
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "using: go run . [flags] <url>")
