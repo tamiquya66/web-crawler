@@ -46,6 +46,16 @@ var schema = []string{
 		to_url   TEXT NOT NULL,
 		PRIMARY KEY (from_url, to_url)
 	)`,
+	`CREATE TABLE IF NOT EXISTS frontier (
+		id         BIGSERIAL PRIMARY KEY,
+		url        TEXT NOT NULL UNIQUE,
+		depth      INT NOT NULL,
+		status     TEXT NOT NULL DEFAULT 'pending'
+			CHECK (status IN ('pending', 'in_progress', 'done', 'failed')),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+	)`,
+	`CREATE INDEX IF NOT EXISTS frontier_pending_idx
+		ON frontier (depth, id) WHERE status = 'pending'`,
 }
 
 // ensures that the table is created, if it's not
@@ -83,6 +93,7 @@ const upsertPageSQL = `
 
 const deleteLinksSQL = `DELETE FROM links WHERE from_url = $1`
 const insertLinksSQL = `INSERT INTO links (from_url , to_url) VALUES ($1, $2) ON CONFLICT DO NOTHING`
+const markTaskSQL = `UPDATE frontier SET status = $2, updated_at = now() WHERE url = $1`
 
 // writer reads from saves and saves them into DB in groups
 // closes done, when the channel saves is closed and everything is saved
@@ -140,6 +151,13 @@ func saveBatch(pool *pgxpool.Pool, records []pageRecord) error {
 	for _, p := range records {
 		cmds.Queue(upsertPageSQL,
 			p.url, p.depth, p.status, p.title, p.errText, len(p.links), p.fetchedAt)
+
+		status := "done"
+		if p.errText != status {
+			status = "failed"
+		}
+		cmds.Queue(markTaskSQL, p.url, status)
+
 		cmds.Queue(deleteLinksSQL, p.url)
 		for _, link := range p.links {
 			cmds.Queue(insertLinksSQL, p.url, link)

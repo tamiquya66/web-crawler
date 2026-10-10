@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -54,6 +55,15 @@ func collectLinks(n *html.Node, links []string) []string {
 	return links
 }
 
+// non-html extensions files
+var skippedExtensions = map[string]bool{
+	".gz": true, ".tgz": true, ".zip": true, ".tar": true, ".7z": true,
+	".msi": true, ".pkg": true, ".exe": true, ".dmg": true, ".deb": true, ".rpm": true,
+	".pdf": true, ".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".svg": true, ".webp": true,
+	".mp4": true, ".mp3": true, ".webm": true,
+	".css": true, ".js": true, ".json": true, ".xml": true, ".txt": true,
+}
+
 // returns href transformed into full addr w/out fragments
 // returns false if the link is invalid
 func resolveLink(base *url.URL, href string) (string, bool) {
@@ -71,6 +81,10 @@ func resolveLink(base *url.URL, href string) (string, bool) {
 	}
 
 	if abs.Hostname() != base.Hostname() {
+		return "", false
+	}
+
+	if skippedExtensions[strings.ToLower(path.Ext(abs.Path))] {
 		return "", false
 	}
 
