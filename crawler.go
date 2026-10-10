@@ -36,7 +36,9 @@ func worker(ctx context.Context, id int, tasks <-chan task, results chan<- resul
 	}
 }
 
-func crawl(ctx context.Context, pool *pgxpool.Pool, startURL string) {
+func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
+	startURL := cfg.startURL
+
 	robots, err := fetchRobots(ctx, startURL)
 	if err != nil {
 		log.Printf("robots.txt can't be loaded: %v", err)
@@ -55,11 +57,11 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, startURL string) {
 
 	tasks := make(chan task)
 	results := make(chan result)
-	ticker := time.NewTicker(requestDelay)
+	ticker := time.NewTicker(cfg.delay)
 	defer ticker.Stop()
 
 	var wg sync.WaitGroup
-	for i := 1; i <= workers; i++ {
+	for i := 1; i <= cfg.workers; i++ {
 		wg.Add(1)
 		go worker(ctx, i, tasks, results, ticker.C, &wg)
 	}
@@ -72,10 +74,10 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, startURL string) {
 	done := ctx.Done() // cancelation channel
 	stopping := false // "stop" mode
 
-	for (!stopping && len(queue) > 0 && pages < maxPages) || inFlight > 0 {
+	for (!stopping && len(queue) > 0 && pages < cfg.maxPages) || inFlight > 0 {
 		var sendCh chan task
 		var next task
-		if !stopping && len(queue) > 0 && pages < maxPages {
+		if !stopping && len(queue) > 0 && pages < cfg.maxPages {
 			sendCh = tasks
 			next = queue[0]
 		}
@@ -123,7 +125,7 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, startURL string) {
 				fetchedAt: time.Now(),
 			}
 
-			if t.depth >= maxDepth {
+			if t.depth >= cfg.maxDepth {
 				log.Printf("[w%d][%d] %s (links: %d, max depth)",
 					r.worker, t.depth, t.url, len(r.page.links))
 				continue

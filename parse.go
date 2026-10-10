@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"net/url"
 	"strings"
 
@@ -75,7 +76,28 @@ func resolveLink(base *url.URL, href string) (string, bool) {
 
 	abs.Fragment = ""
 
+	if abs.Path == "" {
+		abs.Path = "/"
+	}
+
 	return abs.String(), true
+}
+
+// checks the startURL and normalizing it as other links
+func normalizeLink(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", err
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("need full address: https://example.com, received: %q", raw)
+	}
+
+	link, ok := resolveLink(u, raw)
+	if !ok {
+		return "", fmt.Errorf("not able to resolve link: %q", raw)
+	}
+	return link, nil
 }
 
 // handles all the links and gets rid of the duplicates

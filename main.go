@@ -7,17 +7,13 @@ import (
 	"context"
 	"os/signal"
 	"log"
+	"flag"
 )
 
 const (
-	maxDepth = 2
-	maxPages = 100
-	workers  = 5
 	requestTimeout = 10 * time.Second
-	requestDelay = 500 * time.Millisecond
 	maxBodySize = 5 * 1024 * 1024 // 5 megabytes
 	userAgent = "LearningCrawler/0.1"
-	maxDuration = 1 * time.Minute
 	maxRobotsSize = 500 * 1024 // max robots.txt size
 
 	saveBuffer = 100
@@ -27,17 +23,22 @@ const (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("using: go run . <url>")
-		os.Exit(1)
+	cfg, err := parseConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		flag.Usage()
+		os.Exit(2)
 	}
 
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
+	log.Printf("start: %s, depth %d, pages %d, workers %d, pause %v, duration %v",
+		cfg.startURL, cfg.maxDepth, cfg.maxPages, cfg.workers, cfg.delay, cfg.duration)
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	ctx, cancel := context.WithTimeout(ctx, maxDuration)
+	ctx, cancel := context.WithTimeout(ctx, cfg.duration)
 	defer cancel()
 
 	pool, err := connectDB(ctx)
@@ -51,6 +52,6 @@ func main() {
 	}
 
 	start := time.Now()
-	crawl(ctx, pool, os.Args[1])
+	crawl(ctx, pool, cfg)
 	fmt.Println("time of work:", time.Since(start).Round(time.Millisecond))
 }
