@@ -1,25 +1,25 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"time"
 	"context"
-	"os/signal"
-	"log"
 	"flag"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"time"
 )
 
 const (
 	requestTimeout = 10 * time.Second
-	maxBodySize = 5 * 1024 * 1024 // 5 megabytes
-	userAgent = "LearningCrawler/0.1"
-	maxRobotsSize = 500 * 1024 // max robots.txt size
+	maxBodySize    = 5 * 1024 * 1024 // 5 megabytes
+	userAgent      = "LearningCrawler/0.1"
+	maxRobotsSize  = 500 * 1024 // max robots.txt size
 
-	saveBuffer = 100
-	dbBatchSize = 50
+	saveBuffer      = 100
+	dbBatchSize     = 50
 	dbFlushInterval = 2 * time.Second
-	dbTimeout = 10 * time.Second
+	dbTimeout       = 10 * time.Second
 )
 
 func main() {

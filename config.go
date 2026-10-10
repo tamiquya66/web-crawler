@@ -24,8 +24,8 @@ func parseConfig() (config, error) {
 	flag.IntVar(&cfg.maxDepth, "depth", 2, "maximum depth for crawling")
 	flag.IntVar(&cfg.maxPages, "pages", 50, "maximum pages for crawling")
 	flag.IntVar(&cfg.workers, "workers", 5, "maximum workers for crawling")
-	flag.DurationVar(&cfg.delay, "delay", 500 * time.Millisecond, "pause between requests")	
-	flag.DurationVar(&cfg.duration, "duration", 1 * time.Minute, "total work time")
+	flag.DurationVar(&cfg.delay, "delay", 500*time.Millisecond, "pause between requests")
+	flag.DurationVar(&cfg.duration, "duration", 1*time.Minute, "total work time")
 
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "using: go run . [flags] <url>")

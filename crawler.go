@@ -17,18 +17,18 @@ type task struct {
 
 type result struct {
 	task   task
-	page  pageData
+	page   pageData
 	err    error
 	worker int
 }
 
 // worker claims a task, waits for the limiter access, downloads the pages and then sends the results
-func worker(ctx context.Context, id int, tasks <-chan task, results chan<- result, limiter <- chan time.Time, wg *sync.WaitGroup) {
+func worker(ctx context.Context, id int, tasks <-chan task, results chan<- result, limiter <-chan time.Time, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for t := range tasks {
 		select {
-		case <- limiter:
-		case <- ctx.Done():
+		case <-limiter:
+		case <-ctx.Done():
 		}
 
 		page, err := getPage(ctx, t.url)
@@ -72,7 +72,7 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 	inFlight := 0
 
 	done := ctx.Done() // cancelation channel
-	stopping := false // "stop" mode
+	stopping := false  // "stop" mode
 
 	for (!stopping && len(queue) > 0 && pages < cfg.maxPages) || inFlight > 0 {
 		var sendCh chan task
@@ -88,7 +88,7 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 			inFlight++
 			pages++
 
-		case <- done:
+		case <-done:
 			stopping = true
 			done = nil
 			log.Printf("stopping (%v), waiting for other requests to finish: %d", ctx.Err(), inFlight)
@@ -107,21 +107,21 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 				log.Printf("[w%d][%d] error: %s: %v", r.worker, t.depth, t.url, r.err)
 
 				saves <- pageRecord{
-					url: t.url,
-					depth: t.depth,
-					status: r.page.status,
-					errText: r.err.Error(),
+					url:       t.url,
+					depth:     t.depth,
+					status:    r.page.status,
+					errText:   r.err.Error(),
 					fetchedAt: time.Now(),
 				}
 				continue
 			}
 
 			saves <- pageRecord{
-				url: t.url,
-				depth: t.depth,
-				status: r.page.status,
-				title: r.page.title,
-				links: r.page.links,
+				url:       t.url,
+				depth:     t.depth,
+				status:    r.page.status,
+				title:     r.page.title,
+				links:     r.page.links,
 				fetchedAt: time.Now(),
 			}
 
@@ -138,7 +138,7 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 					continue
 				}
 				seen[link] = true
-				if !robots.allowed(link){
+				if !robots.allowed(link) {
 					blocked++
 					continue
 				}
@@ -147,7 +147,7 @@ func crawl(ctx context.Context, pool *pgxpool.Pool, cfg config) {
 			}
 
 			log.Printf("[w%d][%d] %s (links: %d, new: %d, prohibited: %d, in queue: %d, in work: %d)",
-				r.worker, t.depth, t.url, len(r.page.links), added, blocked,len(queue), inFlight)
+				r.worker, t.depth, t.url, len(r.page.links), added, blocked, len(queue), inFlight)
 		}
 	}
 	close(tasks)

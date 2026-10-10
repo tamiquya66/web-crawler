@@ -16,7 +16,7 @@ type robotsRules struct {
 }
 
 // is it allowed to visit the addr
-func (r* robotsRules) allowed(link string) bool {
+func (r *robotsRules) allowed(link string) bool {
 	u, err := url.Parse(link)
 	if err != nil {
 		return false
@@ -65,7 +65,7 @@ func fetchRobots(ctx context.Context, startURL string) (*robotsRules, error) {
 // reads robots.txt by line and collects disallows for User-agent: *
 func parseRobots(r io.Reader) (*robotsRules, error) {
 	rules := &robotsRules{}
-	applies := false // does the current group belong to us
+	applies := false   // does the current group belong to us
 	lastWasUA := false // was the previous line also a User-agent
 
 	scanner := bufio.NewScanner(r)

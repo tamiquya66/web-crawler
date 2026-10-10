@@ -58,12 +58,12 @@ func ensureSchema(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 type pageRecord struct {
-	url string
-	depth int
-	status int // 0 - no response
-	title string // "" - no title
-	errText string // "" - no error
-	links []string
+	url       string
+	depth     int
+	status    int    // 0 - no response
+	title     string // "" - no title
+	errText   string // "" - no error
+	links     []string
 	fetchedAt time.Time
 }
 
@@ -82,7 +82,7 @@ const upsertPageSQL = `
 
 // writer reads from saves and saves them into DB in groups
 // closes done, when the channel saves is closed and everything is saved
-func writer(pool *pgxpool.Pool, saves <- chan pageRecord, done chan <- struct{}) {
+func writer(pool *pgxpool.Pool, saves <-chan pageRecord, done chan<- struct{}) {
 	defer close(done)
 
 	ticker := time.NewTicker(dbFlushInterval)
@@ -106,7 +106,7 @@ func writer(pool *pgxpool.Pool, saves <- chan pageRecord, done chan <- struct{})
 
 	for {
 		select {
-		case rec, ok := <- saves:
+		case rec, ok := <-saves:
 			if !ok {
 				// channel is closed: saving the remains and exit
 				flush()
@@ -117,7 +117,7 @@ func writer(pool *pgxpool.Pool, saves <- chan pageRecord, done chan <- struct{})
 			if len(batch) >= dbBatchSize {
 				flush()
 			}
-		case <- ticker.C:
+		case <-ticker.C:
 			flush()
 		}
 	}
@@ -146,7 +146,7 @@ func saveBatch(pool *pgxpool.Pool, batch []pageRecord) error {
 		if err != nil {
 			return err
 		}
-		
+
 		// removing old page links
 		_, err = tx.Exec(ctx, `DELETE FROM links WHERE from_url = $1`, p.url)
 		if err != nil {

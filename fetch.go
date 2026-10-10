@@ -25,8 +25,8 @@ var client = &http.Client{
 
 type pageData struct {
 	status int
-	title string
-	links []string
+	title  string
+	links  []string
 }
 
 func getPage(ctx context.Context, pageURL string) (pageData, error) {
@@ -42,8 +42,8 @@ func getPage(ctx context.Context, pageURL string) (pageData, error) {
 
 	return pageData{
 		status: status,
-		title: title,
-		links: cleanLinks(base, hrefs),
+		title:  title,
+		links:  cleanLinks(base, hrefs),
 	}, nil
 }
 

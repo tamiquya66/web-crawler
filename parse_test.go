@@ -19,13 +19,13 @@ func mustParseURL(t *testing.T, raw string) *url.URL {
 	return u
 }
 
-func TestResolveLink(t * testing.T) {
+func TestResolveLink(t *testing.T) {
 	base := mustParseURL(t, "https://go.dev/doc/tutorial/")
 
 	tests := []struct {
-		name string
-		href string
-		want string
+		name   string
+		href   string
+		want   string
 		wantOK bool
 	}{
 		{"root path", "/blog/", "https://go.dev/blog/", true},
@@ -43,11 +43,11 @@ func TestResolveLink(t * testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t * testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			got, ok := resolveLink(base, tt.href)
 			if got != tt.want || ok != tt.wantOK {
 				t.Errorf("resolveLink(%q) = (%q, %v), want (%q, %v)",
-				tt.href, got, ok, tt.want, tt.wantOK)
+					tt.href, got, ok, tt.want, tt.wantOK)
 			}
 		})
 	}
@@ -75,7 +75,7 @@ func TestNormalizeStartURL(t *testing.T) {
 			got, err := normalizeLink(tt.raw)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("normalizeStartURL(%q) error = %v, wanterr %v",
-				tt.raw, err, tt.wantErr)
+					tt.raw, err, tt.wantErr)
 			}
 			if got != tt.want {
 				t.Errorf("normalizeStartURL(%q) = %q, want %q",
@@ -99,7 +99,7 @@ func TestFindTitle(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t * testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			doc, err := html.Parse(strings.NewReader(tt.html))
 			if err != nil {
 				t.Fatalf("html.Parse: %v", err)
