@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -80,6 +81,9 @@ const upsertPageSQL = `
 		links_count = EXCLUDED.links_count,
 		fetched_at  = EXCLUDED.fetched_at`
 
+const deleteLinksSQL = `DELETE FROM links WHERE from_url = $1`
+const insertLinksSQL = `INSERT INTO links (from_url , to_url) VALUES ($1, $2) ON CONFLICT DO NOTHING`
+
 // writer reads from saves and saves them into DB in groups
 // closes done, when the channel saves is closed and everything is saved
 func writer(pool *pgxpool.Pool, saves <-chan pageRecord, done chan<- struct{}) {
@@ -95,11 +99,13 @@ func writer(pool *pgxpool.Pool, saves <-chan pageRecord, done chan<- struct{}) {
 		if len(batch) == 0 {
 			return
 		}
+		start := time.Now()
 		if err := saveBatch(pool, batch); err != nil {
 			log.Printf("database write error; pages lost: %d: %v", len(batch), err)
 		} else {
 			saved += len(batch)
-			log.Printf("saved into database: %d (total: %d)", len(batch), saved)
+			log.Printf("saved to db: %d for %v (total: %d)",
+				len(batch), time.Since(start).Round(time.Millisecond), saved)
 		}
 		batch = batch[:0]
 	}
@@ -124,11 +130,21 @@ func writer(pool *pgxpool.Pool, saves <-chan pageRecord, done chan<- struct{}) {
 }
 
 // saves a bunch of pages and their links in a single transaction
-func saveBatch(pool *pgxpool.Pool, batch []pageRecord) error {
+func saveBatch(pool *pgxpool.Pool, records []pageRecord) error {
 	// giving it it's own context not related to the ctrl + c: crawler stop
 	// so we are able to save all the remaining data
 	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
+
+	cmds := &pgx.Batch{}
+	for _, p := range records {
+		cmds.Queue(upsertPageSQL,
+			p.url, p.depth, p.status, p.title, p.errText, len(p.links), p.fetchedAt)
+		cmds.Queue(deleteLinksSQL, p.url)
+		for _, link := range p.links {
+			cmds.Queue(insertLinksSQL, p.url, link)
+		}
+	}
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -140,27 +156,8 @@ func saveBatch(pool *pgxpool.Pool, batch []pageRecord) error {
 		_ = tx.Rollback(ctx)
 	}()
 
-	for _, p := range batch {
-		_, err := tx.Exec(ctx, upsertPageSQL,
-			p.url, p.depth, p.status, p.title, p.errText, len(p.links), p.fetchedAt)
-		if err != nil {
-			return err
-		}
-
-		// removing old page links
-		_, err = tx.Exec(ctx, `DELETE FROM links WHERE from_url = $1`, p.url)
-		if err != nil {
-			return err
-		}
-
-		for _, link := range p.links {
-			_, err := tx.Exec(ctx,
-				`INSERT INTO links (from_url, to_url) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-				p.url, link)
-			if err != nil {
-				return err
-			}
-		}
+	if err := tx.SendBatch(ctx, cmds).Close(); err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)
