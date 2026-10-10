@@ -82,7 +82,7 @@ const upsertPageSQL = `
 		fetched_at  = EXCLUDED.fetched_at`
 
 const deleteLinksSQL = `DELETE FROM links WHERE from_url = $1`
-const insertLinksSQL = `INSERT INTO links (from_url , to_url) VALUES ($1, $2) ON CONFLICT DO NOTHING` 
+const insertLinksSQL = `INSERT INTO links (from_url , to_url) VALUES ($1, $2) ON CONFLICT DO NOTHING`
 
 // writer reads from saves and saves them into DB in groups
 // closes done, when the channel saves is closed and everything is saved
